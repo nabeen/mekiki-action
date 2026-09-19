@@ -1,0 +1,17 @@
+{
+  "name": "mekiki-action",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "packageManager": "bun@1.4.2",
+  "scripts": {
+    "build": "bun build src/index.ts --target node --format cjs --outfile dist/index.cjs",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tests/tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/bun": "1.4.2",
+    "@types/node": "24.13.6",
+    "typescript": "7.0.2"
+  }
+}
