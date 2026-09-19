@@ -1,0 +1,42 @@
+name: mekiki
+description: Upload Storybook to mekiki for cloud visual testing and hosting.
+branding:
+  icon: eye
+  color: purple
+inputs:
+  project-token:
+    description: Project CI token from mekiki
+    required: true
+  api-url:
+    description: mekiki application URL
+    default: https://app.mekiki.dev
+  storybook-dir:
+    description: Built Storybook directory
+    default: storybook-static
+  viewports:
+    description: Comma-separated width x height pairs
+    default: 1280x720
+  commit:
+    description: Tested commit SHA (defaults to PR head or workflow SHA)
+  branch:
+    description: Tested branch (defaults to PR head branch or workflow branch)
+  base-commit:
+    description: Baseline SHA (defaults to PR merge base or latest approved default-branch build)
+  pull-request:
+    description: Pull request number (defaults to workflow event)
+  wait:
+    description: Wait for cloud capture and comparison, not human approval
+    default: 'true'
+  timeout:
+    description: Maximum seconds to wait for capture and comparison
+    default: '900'
+outputs:
+  build-id:
+    description: mekiki build ID
+  build-url:
+    description: Visual review URL
+  status:
+    description: Build status
+runs:
+  using: node24
+  main: dist/index.cjs
