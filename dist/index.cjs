@@ -6620,7 +6620,7 @@ var READ_CHUNK_SIZE = 512 * 1024;
 
 // node_modules/@zip.js/zip.js/lib/zip-core-base.js
 try {
-  setDefaultConfiguration({ baseURI: "file:///home/nabeen/ghq/github.com/nabeen/mekiki-action/node_modules/@zip.js/zip.js/lib/zip-core-base.js" });
+  setDefaultConfiguration({ baseURI: "" });
 } catch {}
 // node_modules/@zip.js/zip.js/lib/zip-module-native.js
 init_configuration();
