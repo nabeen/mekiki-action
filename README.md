@@ -34,9 +34,9 @@ jobs:
           viewports: 1280x720,390x844
 ```
 
-The setup/install/build steps belong to your application: npm, pnpm or yarn also work. The Action itself runs on GitHub's Node 24 runtime and has no npm runtime dependencies. Self-hosted runners must support Node 24 JavaScript Actions.
+The setup/install/build steps belong to your application: npm, pnpm or yarn also work. The Action runs on GitHub's Node 24 runtime with its ZIP library bundled; users do not install its dependencies. Self-hosted runners must support Node 24 JavaScript Actions.
 
-Install the mekiki GitHub App on the repository, register a project in mekiki, and store its CI token as `MEKIKI_TOKEN`. After the first run, require the **mekiki** check in your branch ruleset and bind its source to the mekiki GitHub App. Require the branch to be up to date. The Action waits for capture/comparison, then succeeds even if review is pending. The separate required check stays pending until approval. A failed capture/comparison fails the Action.
+Install the mekiki GitHub App on the repository, register a project in mekiki, and store its CI token as `MEKIKI_TOKEN`. After the first run, require the **mekiki** check in your branch ruleset and bind its source to the mekiki GitHub App. Require the branch to be up to date. The Action uploads one ZIP and exits after submitting the build. Extraction, capture, comparison and review continue on mekiki. The separate required check reports progress and failures, and stays pending until approval when there are changes. Its Details link and summary both link to the build; the Action job summary also provides the link.
 
 ## Inputs
 
@@ -50,20 +50,22 @@ Install the mekiki GitHub App on the repository, register a project in mekiki, a
 | `branch` | PR head branch or workflow branch |
 | `base-commit` | PR merge base; otherwise latest approved default-branch build |
 | `pull-request` | PR number from the event |
-| `wait` | `true`: wait for capture/comparison, not human approval |
+| `wait` | `false`: exit after submitting the ZIP; opt into `true` to wait for capture/comparison, not human approval |
 | `timeout` | `900` seconds for capture/comparison |
 
 Outputs: `build-id`, `build-url`, `status`. With `wait: false`, the status may still be queued. Full Git history is needed to calculate the PR merge base. An explicit baseline with no approved build is treated as a new build, with no fallback to an unrelated PR.
 
 ## Storybook requirements
 
-- Build Storybook before calling the Action. At most 1,000 story/viewport combinations, 10,000 files, 10 MiB per file and 200 MiB per build including generated PNGs.
+- Build Storybook before calling the Action. At most 1,000 story/viewport combinations, 10,000 files, 10 MiB per file and 200 MiB per build including generated PNGs. Compressed ZIP limit: 32 MiB.
 - Stories tagged `!test` are excluded. Capture waits for rendering, `play`, fonts and images.
 - Capture uses Chromium, UTC, en-US, DPR 1, light color scheme and reduced motion.
 - Bundle fonts and images. External network requests and WebSockets are blocked during capture. Use in-process data mocks; Service Workers (including MSW's browser worker) are currently blocked.
 - Fork pull requests do not receive secrets. Run trusted changes on an internal branch. Do not use `pull_request_target` to execute untrusted code with the project token.
 
 ## Development and publication
+
+Deploy the ZIP-capable backend (migration `0004_zip_upload.sql`) before publishing this Action version.
 
 This repository is self-contained. No secrets or private packages are needed to build or test it. The private service repository has its own developer CLI and does not depend on this checkout.
 
@@ -74,3 +76,5 @@ git diff -- dist/index.cjs
 ```
 
 Commit `dist/index.cjs` with source changes. CI rebuilds it and checks for drift. Create a release/tag such as `v1` after publishing; this workspace does not publish or tag automatically. Consumers can then reference the public repository with `uses:`.
+
+The build replaces `import.meta.url` with an empty string to keep the bundle independent of the checkout path. ZIP processing uses `useWebWorkers: false`, so zip.js does not need a worker asset base URL.

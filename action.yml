@@ -26,7 +26,7 @@ inputs:
     description: Pull request number (defaults to workflow event)
   wait:
     description: Wait for cloud capture and comparison, not human approval
-    default: 'true'
+    default: 'false'
   timeout:
     description: Maximum seconds to wait for capture and comparison
     default: '900'

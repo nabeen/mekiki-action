@@ -36,7 +36,7 @@ async function main() {
     viewports: input("viewports") || "1280x720",
     runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT,
-    wait: input("wait") !== "false",
+    wait: input("wait") === "true",
     timeoutSeconds: Number(input("timeout") || "900"),
     onBuild: async (build) => {
       console.log(`Visual review: ${build.url}`);
@@ -44,6 +44,11 @@ async function main() {
         await appendFile(
           process.env.GITHUB_OUTPUT,
           `build-id=${build.id}\nbuild-url=${build.url}\n`,
+        );
+      if (process.env.GITHUB_STEP_SUMMARY)
+        await appendFile(
+          process.env.GITHUB_STEP_SUMMARY,
+          `### mekiki\n\n[Open build and review](${build.url})\n\nCapture, comparison and approval status are reported by the **mekiki** check.\n`,
         );
     },
   });
