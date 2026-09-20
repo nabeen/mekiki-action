@@ -13,5 +13,8 @@
     "@types/bun": "1.4.2",
     "@types/node": "24.13.6",
     "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "@zip.js/zip.js": "2.16.0"
   }
 }

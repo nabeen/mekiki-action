@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js/index-native.js";
 
 export interface UploadOptions {
   api: string;
@@ -88,6 +89,7 @@ export async function upload(options: UploadOptions) {
     throw new Error("Duplicate viewport");
   const manifest = {
     capture: "server",
+    uploadFormat: "zip",
     commit: options.commit,
     branch: options.branch,
     baseCommit: options.baseCommit || undefined,
@@ -142,18 +144,36 @@ export async function upload(options: UploadOptions) {
   ).json()) as { id: string; url: string; status: string };
   await options.onBuild?.(build);
   if (build.status === "uploading") {
+    const started = Date.now();
+    const writer = new ZipWriter(new Uint8ArrayWriter(), { useWebWorkers: false, level: 6 });
     for (const path of files) {
       const body = new Uint8Array(await readFile(resolve(root, path)));
-      await request(
-        `/builds/${build.id}/artifacts/storybook/${path.split("/").map(encodeURIComponent).join("/")}`,
-        { method: "PUT", body },
-      );
+      await writer.add(path, new Uint8ArrayReader(body), {
+        lastModDate: new Date("2000-01-01T00:00:00Z"),
+      });
     }
+    const archive = await writer.close();
+    if (archive.byteLength > 32 * 1024 * 1024)
+      throw new Error("Compressed Storybook ZIP exceeds 32 MiB");
+    console.log(
+      `Packed ${files.length} files into ${(archive.byteLength / 1024 / 1024).toFixed(2)} MiB ZIP (${((Date.now() - started) / 1000).toFixed(1)}s)`,
+    );
+    const uploadStarted = Date.now();
+    await request(`/builds/${build.id}/archive`, {
+      method: "PUT",
+      body: new Uint8Array(archive),
+      headers: { "Content-Type": "application/zip" },
+    });
+    console.log(`ZIP upload complete (${((Date.now() - uploadStarted) / 1000).toFixed(1)}s)`);
   }
   // Also retry finalize for queued builds if a prior attempt lost the queue send.
-  if (["uploading", "queued"].includes(build.status))
-    await request(`/builds/${build.id}/finalize`, { method: "POST" });
-  if (options.wait !== false) {
+  if (["uploading", "queued"].includes(build.status)) {
+    const queued = (await (
+      await request(`/builds/${build.id}/finalize`, { method: "POST" })
+    ).json()) as { status: string };
+    build.status = queued.status;
+  }
+  if (options.wait === true) {
     const timeout = options.timeoutSeconds ?? 900;
     if (!Number.isFinite(timeout) || timeout <= 0) throw new Error("Invalid timeout");
     const deadline = Date.now() + timeout * 1000;

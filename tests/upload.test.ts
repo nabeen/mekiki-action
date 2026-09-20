@@ -2,6 +2,7 @@ import { expect, test } from "bun:test";
 import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Uint8ArrayReader, ZipReader } from "@zip.js/zip.js/index-native.js";
 import { upload } from "../src/upload";
 
 async function storybook() {
@@ -26,6 +27,7 @@ test("uploads only Storybook, requests cloud capture, polls processing and uses 
   const keys: string[] = [],
     uploaded: string[] = [];
   let terminal = "pending";
+  let polls = 0;
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -42,9 +44,21 @@ test("uploads only Storybook, requests cloud capture, polls processing and uses 
       }
       if (request.method === "PUT") {
         uploaded.push(path);
+        expect(path).toBe("/api/ci/builds/build/archive");
+        const archive = new ZipReader(
+          new Uint8ArrayReader(new Uint8Array(await request.arrayBuffer())),
+          { useWebWorkers: false },
+        );
+        expect((await archive.getEntries()).map((e) => e.filename).sort()).toEqual([
+          "iframe.html",
+          "index.html",
+          "index.json",
+        ]);
+        await archive.close();
         return Response.json({ ok: true });
       }
       if (path.endsWith("/finalize")) return Response.json({ status: "queued" });
+      polls++;
       return Response.json({
         status: terminal,
         error: terminal === "failed" ? "Capture failed" : undefined,
@@ -57,12 +71,13 @@ test("uploads only Storybook, requests cloud capture, polls processing and uses 
     token: "secret",
     commit: "a".repeat(40),
     branch: "main",
+    wait: true,
   };
   try {
     expect((await upload(options)).status).toBe("pending");
     expect(manifests[0]?.capture).toBe("server");
     expect(manifests[0]?.snapshots.map((s) => s.storyId)).toEqual(["button"]);
-    expect(uploaded.every((path) => path.includes("/artifacts/storybook/"))).toBe(true);
+    expect(uploaded).toEqual(["/api/ci/builds/build/archive"]);
     await upload(options);
     expect(keys[0]).toBe(keys[1]);
     await writeFile(join(directory, "iframe.html"), "<html>changed</html>");
@@ -70,6 +85,9 @@ test("uploads only Storybook, requests cloud capture, polls processing and uses 
     expect(keys[2]).not.toBe(keys[0]);
     terminal = "failed";
     await expect(upload(options)).rejects.toThrow("Capture failed");
+    const previousPolls = polls;
+    expect((await upload({ ...options, wait: undefined })).status).toBe("queued");
+    expect(polls).toBe(previousPolls);
   } finally {
     server.stop(true);
     await rm(directory, { recursive: true, force: true });
