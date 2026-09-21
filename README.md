@@ -26,7 +26,7 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - run: bun run build-storybook
+      - run: bun run build-storybook --stats-json
       - uses: nabeen/mekiki-action@v1
         with:
           project-token: ${{ secrets.MEKIKI_TOKEN }}
@@ -50,6 +50,10 @@ Install the mekiki GitHub App on the repository, register a project in mekiki, a
 | `branch` | PR head branch or workflow branch |
 | `base-commit` | PR merge base; otherwise latest approved default-branch build |
 | `pull-request` | PR number from the event |
+| `only-changed` | `true`: reuse approved snapshots with identical dependency inputs; full capture when tracing is unavailable |
+| `force-rebuild` | `false`: set `true` to capture all stories for this run |
+| `project-dir` | `.`; the working directory used to build Storybook, especially important in monorepos |
+| `externals` | Optional comma/newline separated `*`, `**`, `?` globs relative to project-dir; changes invalidate all stories, including gitignored generated files |
 | `wait` | `false`: exit after submitting the ZIP; opt into `true` to wait for capture/comparison, not human approval |
 | `timeout` | `900` seconds for capture/comparison |
 
@@ -63,9 +67,17 @@ Outputs: `build-id`, `build-url`, `status`. With `wait: false`, the status may s
 - Bundle fonts and images. External network requests and WebSockets are blocked during capture. Use in-process data mocks; Service Workers (including MSW's browser worker) are currently blocked.
 - Fork pull requests do not receive secrets. Run trusted changes on an internal branch. Do not use `pull_request_target` to execute untrusted code with the project token.
 
+## Incremental capture
+
+Build with `--stats-json` (`npm run build-storybook -- --stats-json` for npm). Starting with the next approved baseline containing input hashes, the Action traces each story's transitive dependencies from `preview-stats.json`. It fingerprints source contents and dependency edges; mekiki compares those fingerprints against its exact approved baseline. Unchanged stories reuse baseline pixels without starting a browser or running their play functions. Changed/new stories are captured and removed stories still require review. The UI and GitHub Check report reused counts. The full Storybook is still uploaded for hosting.
+
+Preview/decorator dependencies, configuration, lockfiles, untraced Git-managed files, static assets, and `VITE_*`, `STORYBOOK_*`, `NODE_ENV`, `TZ` changes invalidate all stories. Use `externals` for generated inputs. Stats paths must match `project-dir`; source files must match the built Storybook. A lockfile is required. Vite Storybook 10.6 is covered with real-build tests. Standard Webpack modules/reasons are accepted; unsupported forms (including concatenated modules), missing sources/stats or dependencies outside the checkout fall back to full capture. The Action logs the fallback reason. No Git-history-based guess is used for deciding reuse.
+
+Changes driven by arbitrary environment variables, time, randomness or external generators cannot be inferred from a source graph. Make those inputs deterministic, list input files in `externals`, or use `force-rebuild: true`. `only-changed: false` disables optimization entirely. The first build after upgrading still captures all stories because old baselines have no fingerprints. Reused PNGs are copied into the new build; only successfully captured story/viewport pairs consume the monthly allowance. Reused and removed snapshots are free, so an entirely reused build can run even at the monthly limit. Capture failures before a screenshot is produced do not consume allowance; retries of the same snapshot do not double-charge. A successful screenshot remains counted even if its subsequent storage or comparison fails.
+
 ## Development and publication
 
-Deploy the ZIP-capable backend (migration `0004_zip_upload.sql`) before publishing this Action version.
+Deploy the incremental-capable backend (migrations through `0006_capture_usage.sql`) before publishing this Action version.
 
 This repository is self-contained. No secrets or private packages are needed to build or test it. The private service repository has its own developer CLI and does not depend on this checkout.
 

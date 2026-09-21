@@ -3856,13 +3856,13 @@ var init_zip_reader = __esm(() => {
 });
 
 // src/index.ts
-var import_node_child_process = require("node:child_process");
-var import_promises2 = require("node:fs/promises");
+var import_node_child_process2 = require("node:child_process");
+var import_promises3 = require("node:fs/promises");
 
 // src/upload.ts
-var import_node_crypto = require("node:crypto");
-var import_promises = require("node:fs/promises");
-var import_node_path = require("node:path");
+var import_node_crypto2 = require("node:crypto");
+var import_promises2 = require("node:fs/promises");
+var import_node_path2 = require("node:path");
 
 // node_modules/@zip.js/zip.js/lib/zip-fs-native.js
 init_configuration();
@@ -8249,18 +8249,228 @@ var DUPLICATES_KEEP_LAST = "keep-last";
 var DUPLICATES_VALUES = new Set([DUPLICATES_THROW, DUPLICATES_KEEP_FIRST, DUPLICATES_KEEP_LAST]);
 // node_modules/@zip.js/zip.js/lib/zip-fs-native.js
 g(setDefaultConfiguration);
+// src/incremental.ts
+var import_node_child_process = require("node:child_process");
+var import_node_crypto = require("node:crypto");
+var import_promises = require("node:fs/promises");
+var import_node_path = require("node:path");
+var hash = (value) => import_node_crypto.createHash("sha256").update(value).digest("hex");
+var inside = (root, file) => {
+  const path = import_node_path.relative(root, file);
+  return path !== ".." && !path.startsWith(`..${import_node_path.sep}`) && !import_node_path.isAbsolute(path);
+};
+var glob = (pattern) => {
+  if (!pattern || /[{}[\]\\]/.test(pattern))
+    throw new Error("Unsupported external glob");
+  let result = "^";
+  for (let i = 0;i < pattern.length; i++) {
+    if (pattern[i] === "*" && pattern[i + 1] === "*") {
+      i++;
+      if (pattern[i + 1] === "/") {
+        result += "(?:.*/)?";
+        i++;
+      } else
+        result += ".*";
+    } else if (pattern[i] === "*")
+      result += "[^/]*";
+    else if (pattern[i] === "?")
+      result += "[^/]";
+    else
+      result += pattern[i].replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`${result}$`);
+};
+async function storyInputs(directory, files, stories, options) {
+  const fallback = (reason) => ({
+    enabled: false,
+    reason,
+    hashes: new Map
+  });
+  if (options.onlyChanged === false)
+    return fallback("disabled");
+  if (!files.includes("preview-stats.json"))
+    return fallback("missing-stats");
+  let reason = "unsupported-stats";
+  try {
+    const project = import_node_path.resolve(options.projectDirectory ?? ".");
+    const repository = import_node_child_process.execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: project,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
+    const stats = JSON.parse(await import_promises.readFile(import_node_path.resolve(directory, "preview-stats.json"), "utf8"));
+    if (!Array.isArray(stats.modules) || !stats.modules.length)
+      return fallback(reason);
+    const edges = new Map;
+    const moduleName = (name) => {
+      const path = name.split("!").at(-1).split("?")[0];
+      if (path.startsWith("/virtual:/@storybook/builder-vite/"))
+        return path;
+      if (path.startsWith("webpack/runtime/"))
+        return path;
+      if (!path.startsWith("./") && !path.startsWith("../"))
+        throw new Error("Unknown module");
+      if (!inside(repository, import_node_path.resolve(project, path)))
+        throw new Error("Module outside checkout");
+      return `./${import_node_path.relative(project, import_node_path.resolve(project, path)).split(import_node_path.sep).join("/")}`;
+    };
+    const add = (name) => {
+      if (!edges.has(name))
+        edges.set(name, new Set);
+      return edges.get(name);
+    };
+    const visit = (modules) => {
+      for (const mod of modules) {
+        if (edges.size > 50000 || typeof mod.name !== "string" || !Array.isArray(mod.reasons))
+          throw new Error("Incomplete stats");
+        if (mod.name.includes(" + "))
+          throw new Error("Concatenated module unsupported");
+        const name = moduleName(mod.name);
+        add(name);
+        for (const entry of mod.reasons) {
+          if (entry.moduleName)
+            add(moduleName(entry.moduleName)).add(name);
+        }
+        if (mod.modules?.length)
+          visit(mod.modules);
+      }
+    };
+    visit(stats.modules);
+    const storyModules = new Set(stories.map((story) => {
+      if (typeof story.importPath !== "string")
+        throw new Error("Missing story import path");
+      const name = moduleName(story.importPath);
+      if (!edges.has(name))
+        throw new Error("Story missing from stats");
+      return name;
+    }));
+    const closure = (roots, stopAtStories = false) => {
+      const seen = new Set;
+      const pending = [...roots];
+      while (pending.length) {
+        const node = pending.pop();
+        if (seen.has(node) || stopAtStories && storyModules.has(node))
+          continue;
+        seen.add(node);
+        pending.push(...edges.get(node) ?? []);
+      }
+      return seen;
+    };
+    const scoped = closure(storyModules);
+    const globalModules = closure([...edges.keys()].filter((name) => !scoped.has(name) || /(^|\/)\.storybook\//.test(name)), true);
+    const externalPatterns = (options.externals ?? []).map(glob);
+    reason = "unavailable-inputs";
+    const tracked = import_node_child_process.execFileSync("git", ["ls-files", "-z"], {
+      cwd: repository,
+      encoding: "utf8",
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"]
+    }).split("\x00").filter(Boolean);
+    if (!tracked.some((path) => /(^|\/)(package-lock\.json|bun\.lockb?|pnpm-lock\.yaml|yarn\.lock)$/.test(path)))
+      return fallback(reason);
+    const globalFiles = new Set;
+    for (const path of tracked) {
+      const name = `./${import_node_path.relative(project, import_node_path.resolve(repository, path)).split(import_node_path.sep).join("/")}`;
+      if (inside(import_node_path.resolve(directory), import_node_path.resolve(repository, path)))
+        throw new Error("Build output must not be tracked");
+      if (!scoped.has(name) || globalModules.has(name) || /(^|\/)\.storybook\//.test(name) || externalPatterns.some((pattern) => pattern.test(name.slice(2))))
+        globalFiles.add(name);
+    }
+    if (externalPatterns.length) {
+      const directories = [project];
+      let visited = 0;
+      while (directories.length) {
+        const directoryPath = directories.pop();
+        for (const entry of await import_promises.readdir(directoryPath, { withFileTypes: true })) {
+          if (++visited > 1e5)
+            throw new Error("External file limit exceeded");
+          if ([".git", "node_modules"].includes(entry.name))
+            continue;
+          const path = import_node_path.resolve(directoryPath, entry.name);
+          if (inside(import_node_path.resolve(directory), path))
+            continue;
+          if (entry.isSymbolicLink())
+            throw new Error("Untraceable external symlink");
+          if (entry.isDirectory())
+            directories.push(path);
+          else if (externalPatterns.some((pattern) => pattern.test(import_node_path.relative(project, path).split(import_node_path.sep).join("/"))))
+            globalFiles.add(`./${import_node_path.relative(project, path).split(import_node_path.sep).join("/")}`);
+        }
+      }
+    }
+    for (const name of globalModules)
+      globalFiles.add(name);
+    const hashes = new Map;
+    let totalBytes = 0;
+    const inputHash = async (name) => {
+      const existing = hashes.get(name);
+      if (existing)
+        return existing;
+      let value;
+      if (name.startsWith("/virtual:") || name.startsWith("webpack/runtime/"))
+        value = hash(name);
+      else if (name === "./iframe.html" && !tracked.includes(import_node_path.relative(repository, import_node_path.resolve(project, name))))
+        value = hash("storybook-generated-iframe-v1");
+      else {
+        const path = import_node_path.resolve(project, name);
+        if (!inside(repository, await import_promises.realpath(path)))
+          throw new Error("Symlink outside checkout");
+        const info = await import_promises.stat(path);
+        totalBytes += info.size;
+        if (!info.isFile() || info.size > 20 * 1024 * 1024 || totalBytes > 200 * 1024 * 1024)
+          throw new Error("Input limit exceeded");
+        value = hash(await import_promises.readFile(path));
+      }
+      hashes.set(name, value);
+      return value;
+    };
+    const digest = async (names) => {
+      const value = import_node_crypto.createHash("sha256");
+      for (const name of [...names].sort())
+        value.update(JSON.stringify([name, await inputHash(name), [...edges.get(name) ?? []].sort()]));
+      return value.digest("hex");
+    };
+    const assets = import_node_crypto.createHash("sha256");
+    for (const file of files) {
+      if (/\.map$/.test(file) || /(?:^|\/)assets\/[^/]+-[A-Za-z0-9_-]{8,}\.(?:[cm]?js|css)$/.test(file) || ["index.json", "index.html", "iframe.html", "preview-stats.json", "project.json"].includes(file))
+        continue;
+      assets.update(JSON.stringify([file, hash(await import_promises.readFile(import_node_path.resolve(directory, file)))]));
+    }
+    const environment = Object.entries(process.env).filter(([key]) => /^(VITE_|STORYBOOK_|NODE_ENV$|TZ$)/.test(key)).sort(([a], [b]) => a.localeCompare(b));
+    const common = hash(JSON.stringify([
+      "mekiki-inputs-v1",
+      await digest(globalFiles),
+      assets.digest("hex"),
+      environment,
+      options.externals ?? []
+    ]));
+    const result = new Map;
+    for (const story of stories) {
+      const dependencies = closure([moduleName(story.importPath)]);
+      result.set(story.id, hash(JSON.stringify([common, story, await digest(dependencies)])));
+    }
+    return {
+      enabled: !options.forceRebuild,
+      reason: options.forceRebuild ? "forced" : "dependency-hashes",
+      hashes: result
+    };
+  } catch {
+    return fallback(reason);
+  }
+}
+
 // src/upload.ts
 var safePath = (path) => path.length <= 500 && !/[\\?#%]/.test(path) && !Array.from(path).some((char) => char.charCodeAt(0) < 32) && !path.split("/").some((part) => !part || part === "." || part === "..");
 async function filesAt(root, dir = root) {
   const files = [];
-  for (const entry of await import_promises.readdir(dir, { withFileTypes: true })) {
+  for (const entry of await import_promises2.readdir(dir, { withFileTypes: true })) {
     if (entry.isSymbolicLink())
       throw new Error("Symlinks are not supported");
-    const path = import_node_path.resolve(dir, entry.name);
+    const path = import_node_path2.resolve(dir, entry.name);
     if (entry.isDirectory())
       files.push(...await filesAt(root, path));
     else if (entry.isFile())
-      files.push(import_node_path.relative(root, path).split(import_node_path.sep).join("/"));
+      files.push(import_node_path2.relative(root, path).split(import_node_path2.sep).join("/"));
     else
       throw new Error("Only regular files are supported");
   }
@@ -8276,22 +8486,22 @@ async function upload(options) {
     throw new Error("Expected full commit SHA");
   if (!options.branch || options.branch.length > 240)
     throw new Error("Invalid branch");
-  const root = import_node_path.resolve(options.directory);
+  const root = import_node_path2.resolve(options.directory);
   const files = await filesAt(root);
   if (!files.length || files.length > 1e4 || !["index.html", "iframe.html", "index.json"].every((path) => files.includes(path)))
     throw new Error("Expected a built Storybook directory with index.json (maximum 10000 files)");
-  const contentsHash = import_node_crypto.createHash("sha256");
+  const contentsHash = import_node_crypto2.createHash("sha256");
   let bytes = 0;
   for (const path of files) {
-    const size = (await import_promises.stat(import_node_path.resolve(root, path))).size;
+    const size = (await import_promises2.stat(import_node_path2.resolve(root, path))).size;
     if (!safePath(path) || size > 10 * 1024 * 1024)
       throw new Error(`Invalid or oversized artifact: ${path}`);
     bytes += size;
-    contentsHash.update(path).update("\x00").update(await import_promises.readFile(import_node_path.resolve(root, path)));
+    contentsHash.update(path).update("\x00").update(await import_promises2.readFile(import_node_path2.resolve(root, path)));
   }
   if (bytes > 200 * 1024 * 1024)
     throw new Error("Storybook exceeds 200 MiB");
-  const index = JSON.parse(await import_promises.readFile(import_node_path.resolve(root, "index.json"), "utf8"));
+  const index = JSON.parse(await import_promises2.readFile(import_node_path2.resolve(root, "index.json"), "utf8"));
   const stories = Object.values(index.entries).filter((story) => story.type === "story" && !story.tags?.includes("!test"));
   const viewports = (options.viewports ?? "1280x720").split(",").map((value) => {
     if (!/^\d+x\d+$/.test(value))
@@ -8305,7 +8515,10 @@ async function upload(options) {
     throw new Error("Expected 1–1000 snapshots");
   if (new Set(viewports.map((v) => `${v.width}x${v.height}`)).size !== viewports.length)
     throw new Error("Duplicate viewport");
+  const incremental = await storyInputs(root, files, stories, options);
+  console.log(`Incremental capture: ${incremental.reason}`);
   const manifest = {
+    incremental: { enabled: incremental.enabled, reason: incremental.reason },
     capture: "server",
     uploadFormat: "zip",
     commit: options.commit,
@@ -8317,6 +8530,7 @@ async function upload(options) {
       if (!/^[a-zA-Z0-9_-]{1,200}$/.test(story.id))
         throw new Error("Invalid story ID");
       return viewports.map((viewport) => ({
+        inputHash: incremental.hashes.has(story.id) ? import_node_crypto2.createHash("sha256").update(`${incremental.hashes.get(story.id)}:${viewport.width}x${viewport.height}`).digest("hex") : undefined,
         storyId: story.id,
         name: `${story.id} / ${viewport.width}x${viewport.height}`,
         path: `${story.id}-${viewport.width}x${viewport.height}.png`,
@@ -8351,7 +8565,7 @@ async function upload(options) {
     }
     throw new Error("API unavailable");
   };
-  const key = import_node_crypto.createHash("sha256").update(`${options.runId ?? options.commit}:${options.attempt ?? "1"}:${contentsHash.digest("hex")}:${JSON.stringify(manifest)}`).digest("hex");
+  const key = import_node_crypto2.createHash("sha256").update(`${options.runId ?? options.commit}:${options.attempt ?? "1"}:${contentsHash.digest("hex")}:${JSON.stringify(manifest)}`).digest("hex");
   const build = await (await request("/builds", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": key },
@@ -8362,7 +8576,7 @@ async function upload(options) {
     const started = Date.now();
     const writer = new ZipWriter(new Uint8ArrayWriter, { useWebWorkers: false, level: 6 });
     for (const path of files) {
-      const body = new Uint8Array(await import_promises.readFile(import_node_path.resolve(root, path)));
+      const body = new Uint8Array(await import_promises2.readFile(import_node_path2.resolve(root, path)));
       await writer.add(path, new Uint8ArrayReader(body), {
         lastModDate: new Date("2000-01-01T00:00:00Z")
       });
@@ -8409,13 +8623,13 @@ async function main() {
   const token = input("project-token");
   if (token)
     console.log(`::add-mask::${escapeCommand(token)}`);
-  const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(await import_promises2.readFile(process.env.GITHUB_EVENT_PATH, "utf8")) : {};
+  const event = process.env.GITHUB_EVENT_PATH ? JSON.parse(await import_promises3.readFile(process.env.GITHUB_EVENT_PATH, "utf8")) : {};
   const pr = event.pull_request;
   const commit = input("commit") || pr?.head.sha || process.env.GITHUB_SHA || "";
   let base = input("base-commit");
   if (!base && pr) {
     try {
-      base = import_node_child_process.execFileSync("git", ["merge-base", commit, pr.base.sha], { encoding: "utf8" }).trim();
+      base = import_node_child_process2.execFileSync("git", ["merge-base", commit, pr.base.sha], { encoding: "utf8" }).trim();
     } catch {
       throw new Error("Cannot resolve PR merge base. Use actions/checkout with fetch-depth: 0, or set base-commit.");
     }
@@ -8431,16 +8645,20 @@ async function main() {
     viewports: input("viewports") || "1280x720",
     runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT,
+    onlyChanged: input("only-changed") !== "false",
+    forceRebuild: input("force-rebuild") === "true",
+    projectDirectory: input("project-dir") || ".",
+    externals: input("externals").split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
     wait: input("wait") === "true",
     timeoutSeconds: Number(input("timeout") || "900"),
     onBuild: async (build) => {
       console.log(`Visual review: ${build.url}`);
       if (process.env.GITHUB_OUTPUT)
-        await import_promises2.appendFile(process.env.GITHUB_OUTPUT, `build-id=${build.id}
+        await import_promises3.appendFile(process.env.GITHUB_OUTPUT, `build-id=${build.id}
 build-url=${build.url}
 `);
       if (process.env.GITHUB_STEP_SUMMARY)
-        await import_promises2.appendFile(process.env.GITHUB_STEP_SUMMARY, `### mekiki
+        await import_promises3.appendFile(process.env.GITHUB_STEP_SUMMARY, `### mekiki
 
 [Open build and review](${build.url})
 
@@ -8449,7 +8667,7 @@ Capture, comparison and approval status are reported by the **mekiki** check.
     }
   });
   if (process.env.GITHUB_OUTPUT)
-    await import_promises2.appendFile(process.env.GITHUB_OUTPUT, `status=${result.status}
+    await import_promises3.appendFile(process.env.GITHUB_OUTPUT, `status=${result.status}
 `);
   console.log("Storybook uploaded. Capture and comparison run on mekiki. The required mekiki check gates approval.");
 }

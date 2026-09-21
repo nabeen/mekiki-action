@@ -24,6 +24,17 @@ inputs:
     description: Baseline SHA (defaults to PR merge base or latest approved default-branch build)
   pull-request:
     description: Pull request number (defaults to workflow event)
+  only-changed:
+    description: Reuse unchanged approved snapshots using preview-stats.json; falls back to full capture
+    default: 'true'
+  force-rebuild:
+    description: Capture every story even when dependency inputs match
+    default: 'false'
+  project-dir:
+    description: Storybook build working directory (for resolving stats paths)
+    default: '.'
+  externals:
+    description: Comma or newline separated globs relative to project-dir; matching files invalidate all stories
   wait:
     description: Wait for cloud capture and comparison, not human approval
     default: 'false'

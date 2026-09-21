@@ -36,6 +36,13 @@ async function main() {
     viewports: input("viewports") || "1280x720",
     runId: process.env.GITHUB_RUN_ID,
     attempt: process.env.GITHUB_RUN_ATTEMPT,
+    onlyChanged: input("only-changed") !== "false",
+    forceRebuild: input("force-rebuild") === "true",
+    projectDirectory: input("project-dir") || ".",
+    externals: input("externals")
+      .split(/[,\n]/)
+      .map((value) => value.trim())
+      .filter(Boolean),
     wait: input("wait") === "true",
     timeoutSeconds: Number(input("timeout") || "900"),
     onBuild: async (build) => {

@@ -3,7 +3,9 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { relative, resolve, sep } from "node:path";
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipWriter } from "@zip.js/zip.js/index-native.js";
 
-export interface UploadOptions {
+import { type IncrementalOptions, type StoryInput, storyInputs } from "./incremental";
+
+export interface UploadOptions extends IncrementalOptions {
   api: string;
   token: string;
   directory: string;
@@ -71,7 +73,7 @@ export async function upload(options: UploadOptions) {
   }
   if (bytes > 200 * 1024 * 1024) throw new Error("Storybook exceeds 200 MiB");
   const index = JSON.parse(await readFile(resolve(root, "index.json"), "utf8")) as {
-    entries: Record<string, { id: string; type: string; tags?: string[] }>;
+    entries: Record<string, StoryInput & { type: string; tags?: string[] }>;
   };
   const stories = Object.values(index.entries).filter(
     (story) => story.type === "story" && !story.tags?.includes("!test"),
@@ -87,7 +89,10 @@ export async function upload(options: UploadOptions) {
     throw new Error("Expected 1–1000 snapshots");
   if (new Set(viewports.map((v) => `${v.width}x${v.height}`)).size !== viewports.length)
     throw new Error("Duplicate viewport");
+  const incremental = await storyInputs(root, files, stories, options);
+  console.log(`Incremental capture: ${incremental.reason}`);
   const manifest = {
+    incremental: { enabled: incremental.enabled, reason: incremental.reason },
     capture: "server",
     uploadFormat: "zip",
     commit: options.commit,
@@ -98,6 +103,11 @@ export async function upload(options: UploadOptions) {
     snapshots: stories.flatMap((story) => {
       if (!/^[a-zA-Z0-9_-]{1,200}$/.test(story.id)) throw new Error("Invalid story ID");
       return viewports.map((viewport) => ({
+        inputHash: incremental.hashes.has(story.id)
+          ? createHash("sha256")
+              .update(`${incremental.hashes.get(story.id)}:${viewport.width}x${viewport.height}`)
+              .digest("hex")
+          : undefined,
         storyId: story.id,
         name: `${story.id} / ${viewport.width}x${viewport.height}`,
         path: `${story.id}-${viewport.width}x${viewport.height}.png`,
