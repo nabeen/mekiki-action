@@ -8566,11 +8566,13 @@ async function upload(options) {
     throw new Error("API unavailable");
   };
   const key = import_node_crypto2.createHash("sha256").update(`${options.runId ?? options.commit}:${options.attempt ?? "1"}:${contentsHash.digest("hex")}:${JSON.stringify(manifest)}`).digest("hex");
+  const createStarted = Date.now();
   const build = await (await request("/builds", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Idempotency-Key": key },
     body: JSON.stringify(manifest)
   })).json();
+  console.log(`Build accepted (${((Date.now() - createStarted) / 1000).toFixed(1)}s)`);
   await options.onBuild?.(build);
   if (build.status === "uploading") {
     const started = Date.now();
@@ -8594,8 +8596,10 @@ async function upload(options) {
     console.log(`ZIP upload complete (${((Date.now() - uploadStarted) / 1000).toFixed(1)}s)`);
   }
   if (["uploading", "queued"].includes(build.status)) {
+    const finalizeStarted = Date.now();
     const queued = await (await request(`/builds/${build.id}/finalize`, { method: "POST" })).json();
     build.status = queued.status;
+    console.log(`Processing requested (${((Date.now() - finalizeStarted) / 1000).toFixed(1)}s)`);
   }
   if (options.wait === true) {
     const timeout = options.timeoutSeconds ?? 900;
