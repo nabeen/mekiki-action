@@ -145,6 +145,7 @@ export async function upload(options: UploadOptions) {
       `${options.runId ?? options.commit}:${options.attempt ?? "1"}:${contentsHash.digest("hex")}:${JSON.stringify(manifest)}`,
     )
     .digest("hex");
+  const createStarted = Date.now();
   const build = (await (
     await request("/builds", {
       method: "POST",
@@ -152,6 +153,7 @@ export async function upload(options: UploadOptions) {
       body: JSON.stringify(manifest),
     })
   ).json()) as { id: string; url: string; status: string };
+  console.log(`Build accepted (${((Date.now() - createStarted) / 1000).toFixed(1)}s)`);
   await options.onBuild?.(build);
   if (build.status === "uploading") {
     const started = Date.now();
@@ -178,10 +180,12 @@ export async function upload(options: UploadOptions) {
   }
   // Also retry finalize for queued builds if a prior attempt lost the queue send.
   if (["uploading", "queued"].includes(build.status)) {
+    const finalizeStarted = Date.now();
     const queued = (await (
       await request(`/builds/${build.id}/finalize`, { method: "POST" })
     ).json()) as { status: string };
     build.status = queued.status;
+    console.log(`Processing requested (${((Date.now() - finalizeStarted) / 1000).toFixed(1)}s)`);
   }
   if (options.wait === true) {
     const timeout = options.timeoutSeconds ?? 900;

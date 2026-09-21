@@ -90,3 +90,5 @@ git diff -- dist/index.cjs
 Commit `dist/index.cjs` with source changes. CI rebuilds it and checks for drift. Create a release/tag such as `v1` after publishing; this workspace does not publish or tag automatically. Consumers can then reference the public repository with `uses:`.
 
 The build replaces `import.meta.url` with an empty string to keep the bundle independent of the checkout path. ZIP processing uses `useWebWorkers: false`, so zip.js does not need a worker asset base URL.
+
+The Action logs build acceptance, ZIP packing, ZIP transfer, and processing submission separately. GitHub Check updates run asynchronously on mekiki and do not hold the upload response open.
